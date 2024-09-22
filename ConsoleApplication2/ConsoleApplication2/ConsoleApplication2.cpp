@@ -8,34 +8,28 @@
 #include <string>
 #include <assert.h>
 
-HHOOK g_HookProc;
-LRESULT CALLBACK MyProc(int nCode, WPARAM wParam, LPARAM lParam);
+HHOOK g_HookProc1;
+HHOOK g_HookProc2;
+LRESULT CALLBACK MyProc1(int nCode, WPARAM wParam, LPARAM lParam);
+LRESULT CALLBACK MyProc2(int nCode, WPARAM wParam, LPARAM lParam);
 
 std::ofstream g_OutFile("d:\\gqk_info.txt", std::ios::app);
 
-enum FoundStat
-{
-	STAT_NULL = 0,
-	STAT_SAVE_AS_DIALOG,
-	STAT_SOURCE_FILE,
-};
-
-struct FoundData {
-	FoundStat stat;
-	HWND hwnd;
-};
-
-FoundData g_FoundData;
+bool g_FoundSrc = false;
 
 void __declspec(dllexport) SetGlobalHook()
 {
-	g_HookProc = ::SetWindowsHookEx(WH_CBT, MyProc, GetModuleHandle(TEXT("ConsoleApplication2.dll")), 0);
+	g_HookProc1 = ::SetWindowsHookEx(WH_CBT, MyProc1, GetModuleHandle(TEXT("ConsoleApplication2.dll")), 0);
+	g_HookProc2 = ::SetWindowsHookEx(WH_SYSMSGFILTER, MyProc2, GetModuleHandle(TEXT("ConsoleApplication2.dll")), 0);
 }
 
 void __declspec(dllexport) UnsetGlobalHook()
 {
-	if (NULL != g_HookProc) {
-		::UnhookWindowsHookEx(g_HookProc);
+	if (NULL != g_HookProc1) {
+		::UnhookWindowsHookEx(g_HookProc1);
+	}
+	if (NULL != g_HookProc2) {
+		::UnhookWindowsHookEx(g_HookProc2);
 	}
 }
 
@@ -80,7 +74,7 @@ static BOOL CALLBACK EnumChildProc(HWND hwnd, LPARAM lParam)
 			g_OutFile << "新文件名：" << title << std::endl;
 		}
 		else {
-			g_FoundData.stat = STAT_SOURCE_FILE;
+			g_FoundSrc = false;
 			g_OutFile << "原文件名：" << title << std::endl;
 		}
 
@@ -91,49 +85,49 @@ static BOOL CALLBACK EnumChildProc(HWND hwnd, LPARAM lParam)
 }
 
 //https://learn.microsoft.com/zh-cn/windows/win32/winmsg/cbtproc
-LRESULT CALLBACK MyProc(int nCode, WPARAM wParam, LPARAM lParam)
+LRESULT CALLBACK MyProc1(int nCode, WPARAM wParam, LPARAM lParam)
 {
-	do {
-		if (nCode == HCBT_SETFOCUS || nCode == HCBT_DESTROYWND) {
-			HWND hwnd = (HWND)wParam;
-			char buf[256];
-			GetClassNameA(hwnd, buf, sizeof(buf));
+	if (nCode == HCBT_CREATEWND || nCode == HCBT_DESTROYWND) {
+		HWND hwnd = (HWND)wParam;
+		char buf[256];
+		GetClassNameA(hwnd, buf, sizeof(buf));
 
-			g_OutFile << "code：" << nCode << ", buf1：" << buf << std::endl;
+		if (strcmp(buf, "#32770") == 0) {
+			if (nCode == HCBT_CREATEWND) {
+				g_FoundSrc = true;
+			} else {
+				g_FoundSrc = false;
+			}
 
 			std::string title = GetTitle(hwnd);
-			g_OutFile << "title0：" << title << std::endl;
-
-			if (strcmp(buf, "#32770") == 0) {
-				
-
-				std::string title = GetTitle(hwnd);
-				g_OutFile << "title1：" << title << std::endl;
-				if (title.find("另存为") != -1) {
-
-					if (g_FoundData.stat == STAT_NULL) {
-						g_FoundData.hwnd = hwnd;
-						g_FoundData.stat = STAT_SAVE_AS_DIALOG;
-					}
-					assert(g_FoundData.hwnd == hwnd);
-
-					bool flag = (nCode == HCBT_DESTROYWND);
-					if (flag) {
-						g_FoundData.stat = STAT_NULL;
-					}
-					if (g_FoundData.stat == STAT_SOURCE_FILE) {
-						break;
-					}
-
-					if (EnumChildWindows(hwnd, EnumChildProc, (LPARAM)flag) == FALSE) {
-						break;
-					}
-				}
+			if (title.find("另存为") != -1 || title.find("Save As") != -1) {
+				bool flag = (nCode == HCBT_DESTROYWND);
+				EnumChildWindows(hwnd, EnumChildProc, (LPARAM)flag);
 			}
 		}
-	} while (false);
+	}
 
 	g_OutFile.flush();
-	
-	return CallNextHookEx(g_HookProc, nCode, wParam, lParam);
+	return CallNextHookEx(g_HookProc1, nCode, wParam, lParam);
+}
+
+LRESULT CALLBACK MyProc2(int nCode, WPARAM wParam, LPARAM lParam)
+{
+	if (nCode == MSGF_DIALOGBOX && g_FoundSrc == true) {
+		HWND hwnd = ((PMSG)lParam)->hwnd;
+		char buf[256];
+		memset(buf, 0, sizeof(buf));
+		GetClassNameA(hwnd, buf, sizeof(buf));
+
+		if (strcmp(buf, "#32770") == 0) {
+			std::string title = GetTitle(hwnd);
+			if (title.find("另存为") != -1 || title.find("Save As") != -1) {
+				bool flag = (nCode == HCBT_DESTROYWND);
+				EnumChildWindows(hwnd, EnumChildProc, (LPARAM)flag);
+			}
+		}
+	}
+
+	g_OutFile.flush();
+	return CallNextHookEx(g_HookProc2, nCode, wParam, lParam);
 }
